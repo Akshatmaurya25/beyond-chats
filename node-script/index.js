@@ -1,68 +1,61 @@
 import 'dotenv/config';
-import { getLatestOriginalArticle, createArticle } from './services/laravelApi.js';
+import { getAllArticles, createArticle } from './services/laravelApi.js';
 import { searchGoogle } from './services/googleSearch.js';
 import { scrapeArticleContent } from './services/scraper.js';
 import { initGemini, rewriteArticle } from './services/gemini.js';
 
-async function main() {
-  console.log('='.repeat(60));
-  console.log('BeyondChats Article Processor');
-  console.log('='.repeat(60));
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-  if (!process.env.GEMINI_API_KEY) {
-    console.error('ERROR: GEMINI_API_KEY is not set in .env file');
-    process.exit(1);
-  }
-
-  initGemini(process.env.GEMINI_API_KEY);
+async function processArticle(article, index, total) {
+  console.log(`\n${'─'.repeat(60)}`);
+  console.log(`Processing article ${index + 1}/${total}: "${article.title}"`);
+  console.log('─'.repeat(60));
 
   try {
-    console.log('\n[Step 1] Fetching latest original article from Laravel API...');
-    const latestArticle = await getLatestOriginalArticle();
+    // Step 1: Try to search for similar articles
+    console.log('\n[Step 1] Searching for similar articles...');
+    let referenceArticles = [];
 
-    if (!latestArticle || !latestArticle.data) {
-      console.error('No articles found in the database. Run the Laravel scraper first.');
-      process.exit(1);
-    }
+    try {
+      const searchResults = await searchGoogle(article.title, 2);
 
-    const article = latestArticle.data;
-    console.log(`Found article: "${article.title}"`);
+      if (searchResults.length > 0) {
+        console.log(`Found ${searchResults.length} reference articles:`);
+        searchResults.forEach((r, i) => console.log(`  ${i + 1}. ${r.title}`));
 
-    console.log('\n[Step 2] Searching Google for similar articles...');
-    const searchResults = await searchGoogle(article.title, 2);
-
-    if (searchResults.length === 0) {
-      console.error('No search results found. Cannot proceed without reference articles.');
-      process.exit(1);
-    }
-
-    console.log(`Found ${searchResults.length} reference articles:`);
-    searchResults.forEach((r, i) => console.log(`  ${i + 1}. ${r.title} - ${r.url}`));
-
-    console.log('\n[Step 3] Scraping reference article content...');
-    const referenceArticles = [];
-    for (const result of searchResults) {
-      const scraped = await scrapeArticleContent(result.url);
-      if (scraped.content && scraped.content.length > 100) {
-        referenceArticles.push(scraped);
+        // Step 2: Scrape reference articles
+        console.log('\n[Step 2] Scraping reference article content...');
+        for (const result of searchResults) {
+          const scraped = await scrapeArticleContent(result.url);
+          if (scraped.content && scraped.content.length > 100) {
+            referenceArticles.push(scraped);
+          }
+        }
       }
+    } catch (searchError) {
+      console.log(`⚠ Search failed: ${searchError.message}`);
     }
 
     if (referenceArticles.length === 0) {
-      console.error('Failed to scrape any reference articles.');
-      process.exit(1);
+      console.log('ℹ No reference articles available. Will enhance using AI knowledge only.');
+    } else {
+      console.log(`✓ Got ${referenceArticles.length} reference article(s) for context.`);
     }
 
-    console.log('\n[Step 4] Rewriting article using Gemini AI...');
+    // Step 3: Rewrite with Gemini AI (with or without references)
+    console.log('\n[Step 3] Enhancing article using Gemini AI...');
     const rewrittenContent = await rewriteArticle(
       { title: article.title, content: article.content },
       referenceArticles
     );
 
-    const citationsHtml = buildCitations(referenceArticles);
+    const citationsHtml = referenceArticles.length > 0 ? buildCitations(referenceArticles) : '';
     const finalContent = rewrittenContent + citationsHtml;
 
-    console.log('\n[Step 5] Publishing updated article to Laravel API...');
+    // Step 4: Publish to Laravel API
+    console.log('\n[Step 4] Publishing enhanced article...');
     const newArticle = await createArticle({
       title: `${article.title} (Enhanced)`,
       slug: `${article.slug}-enhanced-${Date.now()}`,
@@ -79,10 +72,87 @@ async function main() {
       })))
     });
 
+    console.log(`✓ SUCCESS! Enhanced article created with ID: ${newArticle.data?.id || 'N/A'}`);
+    return { success: true, newId: newArticle.data?.id };
+
+  } catch (error) {
+    console.error(`✗ ERROR processing article: ${error.message}`);
+    return { success: false, reason: error.message };
+  }
+}
+
+async function main() {
+  console.log('='.repeat(60));
+  console.log('BeyondChats Article Processor - Batch Mode');
+  console.log('='.repeat(60));
+
+  if (!process.env.GEMINI_API_KEY) {
+    console.error('ERROR: GEMINI_API_KEY is not set in .env file');
+    process.exit(1);
+  }
+
+  initGemini(process.env.GEMINI_API_KEY);
+
+  try {
+    // Get all articles
+    console.log('\nFetching all articles from Laravel API...');
+    const response = await getAllArticles();
+    const allArticles = response.data || [];
+
+    console.log(`Total articles in database: ${allArticles.length}`);
+
+    // Filter: only original articles (is_updated = false)
+    const originalArticles = allArticles.filter(a => !a.is_updated);
+    console.log(`Original articles: ${originalArticles.length}`);
+
+    // Find which original articles already have enhanced versions
+    const enhancedOriginalIds = allArticles
+      .filter(a => a.is_updated && a.original_article_id)
+      .map(a => a.original_article_id);
+
+    // Filter: original articles that DON'T have enhanced versions yet
+    const articlesToProcess = originalArticles.filter(
+      a => !enhancedOriginalIds.includes(a.id)
+    );
+
+    console.log(`Articles needing enhancement: ${articlesToProcess.length}`);
+
+    if (articlesToProcess.length === 0) {
+      console.log('\n✓ All articles have already been enhanced!');
+      process.exit(0);
+    }
+
+    // Process each article
+    const results = [];
+    for (let i = 0; i < articlesToProcess.length; i++) {
+      const article = articlesToProcess[i];
+      const result = await processArticle(article, i, articlesToProcess.length);
+      results.push({ title: article.title, ...result });
+
+      // Wait between articles to avoid rate limits (30 seconds)
+      if (i < articlesToProcess.length - 1) {
+        console.log('\n⏳ Waiting 30 seconds before next article (rate limit protection)...');
+        await delay(30000);
+      }
+    }
+
+    // Summary
     console.log('\n' + '='.repeat(60));
-    console.log('SUCCESS! Article has been processed and published.');
-    console.log(`New article ID: ${newArticle.data?.id || 'N/A'}`);
+    console.log('BATCH PROCESSING COMPLETE');
     console.log('='.repeat(60));
+
+    const successful = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success).length;
+
+    console.log(`\n✓ Successful: ${successful}`);
+    console.log(`✗ Failed: ${failed}`);
+
+    if (failed > 0) {
+      console.log('\nFailed articles:');
+      results.filter(r => !r.success).forEach(r => {
+        console.log(`  - "${r.title}": ${r.reason}`);
+      });
+    }
 
   } catch (error) {
     console.error('\nERROR:', error.message);

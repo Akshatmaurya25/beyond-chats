@@ -56,18 +56,20 @@ export async function rewriteArticle(originalArticle, referenceArticles) {
 }
 
 function buildPrompt(originalArticle, referenceArticles) {
-  const referencesText = referenceArticles
-    .map(
-      (ref, i) => `
+  // If we have reference articles, use them
+  if (referenceArticles && referenceArticles.length > 0) {
+    const referencesText = referenceArticles
+      .map(
+        (ref, i) => `
 Reference Article ${i + 1}: "${ref.title}"
 URL: ${ref.url}
 Content:
 ${ref.content.substring(0, 3000)}
 `
-    )
-    .join("\n---\n");
+      )
+      .join("\n---\n");
 
-  return `You are an expert content writer. Your task is to rewrite and improve an article based on reference articles that rank well on Google for similar topics.
+    return `You are an expert content writer. Your task is to rewrite and improve an article based on reference articles that rank well on Google for similar topics.
 
 ORIGINAL ARTICLE:
 Title: ${originalArticle.title}
@@ -89,6 +91,29 @@ INSTRUCTIONS:
 
 OUTPUT FORMAT:
 Return ONLY the rewritten article content in HTML format. Start directly with the content (no title tag needed as it will be added separately).`;
+  }
+
+  // No reference articles - enhance using AI knowledge only
+  return `You are an expert content writer and SEO specialist. Your task is to significantly enhance and expand an article to make it more comprehensive, engaging, and SEO-friendly.
+
+ORIGINAL ARTICLE:
+Title: ${originalArticle.title}
+Content:
+${originalArticle.content}
+
+INSTRUCTIONS:
+1. Significantly expand and improve this article using your knowledge of the topic
+2. Add more depth, examples, statistics, and practical insights
+3. Structure the article with clear headings (h2, h3) for better readability
+4. Include relevant industry best practices and trends
+5. Make it comprehensive - aim for 1500-2000 words
+6. Use engaging, professional language
+7. Add bullet points and lists where appropriate
+8. Maintain factual accuracy - only include verifiable information
+9. Output should be in clean HTML format
+
+OUTPUT FORMAT:
+Return ONLY the enhanced article content in HTML format. Start directly with the content (no title tag needed).`;
 }
 
 export default { initGemini, rewriteArticle };
