@@ -1,43 +1,71 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 let genAI = null;
 let model = null;
 
 export function initGemini(apiKey) {
   genAI = new GoogleGenerativeAI(apiKey);
-  model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+  model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function rewriteArticle(originalArticle, referenceArticles) {
   if (!model) {
-    throw new Error('Gemini not initialized. Call initGemini() first.');
+    throw new Error("Gemini not initialized. Call initGemini() first.");
   }
 
   const prompt = buildPrompt(originalArticle, referenceArticles);
 
-  console.log('Calling Gemini API to rewrite article...');
+  console.log("Calling Gemini API to rewrite article...");
 
-  try {
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+  // Retry logic for rate limits
+  const maxRetries = 3;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const text = response.text();
 
-    console.log('Article rewritten successfully');
-    return text;
+      console.log("Article rewritten successfully");
+      return text;
+    } catch (error) {
+      console.error(
+        `Gemini API error (attempt ${attempt}/${maxRetries}):`,
+        error.message
+      );
 
-  } catch (error) {
-    console.error('Gemini API error:', error.message);
-    throw error;
+      // Check if it's a rate limit error
+      if (error.message.includes("429") || error.message.includes("quota")) {
+        if (attempt < maxRetries) {
+          const waitTime = 60 * attempt; // Wait 60s, 120s, 180s
+          console.log(
+            `Rate limited. Waiting ${waitTime} seconds before retry...`
+          );
+          await delay(waitTime * 1000);
+          continue;
+        }
+      }
+
+      throw error;
+    }
   }
 }
 
 function buildPrompt(originalArticle, referenceArticles) {
-  const referencesText = referenceArticles.map((ref, i) => `
+  const referencesText = referenceArticles
+    .map(
+      (ref, i) => `
 Reference Article ${i + 1}: "${ref.title}"
 URL: ${ref.url}
 Content:
 ${ref.content.substring(0, 3000)}
-`).join('\n---\n');
+`
+    )
+    .join("\n---\n");
 
   return `You are an expert content writer. Your task is to rewrite and improve an article based on reference articles that rank well on Google for similar topics.
 

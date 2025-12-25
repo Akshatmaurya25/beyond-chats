@@ -2,6 +2,37 @@
 
 A full-stack monorepo application that scrapes articles from BeyondChats blog, processes them using AI, and displays them in a modern web interface.
 
+---
+
+## Quick Start - Run Locally
+
+> **Prerequisites:** PHP 8.1+ (via XAMPP), Node.js 18+, Gemini API Key
+
+### Terminal 1: Start Laravel Backend
+```bash
+cd backend
+php artisan serve
+```
+API runs at: **http://localhost:8000/api**
+
+### Terminal 2: Start React Frontend
+```bash
+cd frontend
+npm install    # first time only
+npm run dev
+```
+Frontend runs at: **http://localhost:5173**
+
+### Terminal 3: Run NodeJS Article Processor (Optional)
+```bash
+cd node-script
+npm install    # first time only
+# Add your GEMINI_API_KEY to .env file first
+npm start
+```
+
+---
+
 ## Live Demo
 
 **Frontend:** [Your Vercel URL here]

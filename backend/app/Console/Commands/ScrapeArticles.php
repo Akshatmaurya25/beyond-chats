@@ -153,7 +153,7 @@ class ScrapeArticles extends Command
     {
         libxml_use_internal_errors(true);
         $dom = new DOMDocument();
-        $dom->loadHTML($html, LIBXML_NOERROR);
+        $dom->loadHTML('<?xml encoding="utf-8" ?>' . $html, LIBXML_NOERROR);
         $xpath = new DOMXPath($dom);
 
         // Remove unwanted elements
@@ -162,8 +162,11 @@ class ScrapeArticles extends Command
             $node->parentNode->removeChild($node);
         }
 
-        // Try to find main content
+        // Try to find main content (BeyondChats specific selectors first)
         $contentSelectors = [
+            "//*[contains(@class, 'has-content-area')]",
+            "//*[contains(@class, 'elementor-widget-theme-post-content')]",
+            "//article//*[contains(@class, 'elementor-widget-container')]",
             "//article",
             "//*[contains(@class, 'post-content')]",
             "//*[contains(@class, 'entry-content')]",
@@ -172,20 +175,39 @@ class ScrapeArticles extends Command
             "//*[@role='main']",
         ];
 
-        foreach ($contentSelectors as $selector) {
-            $content = $xpath->query($selector)->item(0);
-            if ($content) {
-                return $this->cleanHtml($dom->saveHTML($content));
-            }
-        }
-
-        // Fallback: get all paragraphs
+        // First try: get all paragraphs (works better for JS-rendered sites)
         $paragraphs = $xpath->query("//p");
         $text = '';
         foreach ($paragraphs as $p) {
             $pText = trim($p->textContent);
-            if (strlen($pText) > 50) {
+            if (strlen($pText) > 30) {
                 $text .= "<p>{$pText}</p>\n";
+            }
+        }
+
+        // Also get headings
+        $headings = $xpath->query("//h2 | //h3");
+        $headingText = '';
+        foreach ($headings as $h) {
+            $hText = trim($h->textContent);
+            if (strlen($hText) > 5 && strlen($hText) < 200) {
+                $tag = $h->nodeName;
+                $headingText .= "<{$tag}>{$hText}</{$tag}>\n";
+            }
+        }
+
+        if (strlen($text) > 500) {
+            return $headingText . $text;
+        }
+
+        // Fallback: try content selectors
+        foreach ($contentSelectors as $selector) {
+            $content = $xpath->query($selector)->item(0);
+            if ($content) {
+                $extracted = $this->cleanHtml($dom->saveHTML($content));
+                if (strlen($extracted) > 500) {
+                    return $extracted;
+                }
             }
         }
 
